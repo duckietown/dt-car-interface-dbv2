@@ -1,0 +1,11 @@
+angle_lim: 0.540
+axis_distance: 0.105
+baseline: 0.092
+cog_distance: 0.0525
+gain: 1.0
+k_wheel: 27.0
+limit: 1.0
+omega_max: 8.0
+radius: 0.0318
+trim: 0.0
+v_max: 1.0
