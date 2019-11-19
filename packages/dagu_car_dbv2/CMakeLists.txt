@@ -4,7 +4,6 @@ project(dagu_car_dbv2)
 
 find_package(catkin REQUIRED COMPONENTS
   rospy
-  # pkg_name
   duckietown_msgs # Every duckietown packages should use this.
 )
 
