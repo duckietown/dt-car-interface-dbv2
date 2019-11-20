@@ -4,4 +4,4 @@ set -e
 
 # YOUR CODE BELOW THIS LINE
 # ----------------------------------------------------------------------------
-echo "This is an empty launch script. Update it to launch your application."
+roslaunch --wait car_interface_dbv2 all.launch veh:=$VEHICLE_NAME

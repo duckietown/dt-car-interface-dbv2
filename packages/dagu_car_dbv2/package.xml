@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>dagu_car_dbv2</name>
+  <version>1.0.0</version>
+  <description>Dagu car package, updated for Duckiebot V2.</description>
+
+   <author email="yershov@mit.edu">Dmitry Yershov</author>
+  <author email="syliu@mit.edu">Shih-Yuan Liu</author>
+  <author email="hosnerm@ethz.ch">Merlin Hosner</author>
+  
+  <maintainer email="scottti@student.ethz.ch">Timothy Scott</maintainer>
+  <license>GPLv3</license>
+
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>duckietown_msgs</depend>
+  <depend>rospy</depend>
+  <depend>adafruit_drivers</depend>
+  <depend>pkg_name</depend>
+
+</package>
