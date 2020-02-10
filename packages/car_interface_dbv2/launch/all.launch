@@ -24,7 +24,7 @@
     </include>
 
     <!-- Car Command Switch: switches between different sources of car_cmds depending on the current mode of the robot -->
-    <include file="$(find dagu_car_dbv2)/launch/car_cmd_switch_node.launch">
+    <include file="$(find dagu_car)/launch/car_cmd_switch_node.launch">
       <arg name="veh" value="$(arg veh)"/>
     </include>
 
