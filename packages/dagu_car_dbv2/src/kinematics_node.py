@@ -6,7 +6,7 @@ import time
 import os.path
 
 from duckietown import DTROS
-from duckietown_msgs.msg import WheelsCmdDBV2Stamped, Twist2DStamped
+from duckietown_msgs.msg import WheelsCmdDBV2Stamped, Twist2DStamped, EncoderStamped
 from std_srvs.srv import EmptyResponse, Empty
 import math
 
@@ -33,7 +33,6 @@ class KinematicsNode(DTROS):
         node_name (:obj:`str`): a unique, descriptive name for the node that ROS will use
 
     Configuration:
-        ~gain (:obj:`float`): scaling factor applied to the desired velocity, default is 1.0
         ~trim (:obj:`float`): trimming factor that is typically used to offset differences in the
             behaviour of the left and right motors, it is recommended to use a value that results in
             the robot moving in a straight line when forward command is given, default is 0.0
@@ -66,7 +65,6 @@ class KinematicsNode(DTROS):
         self.veh_name = rospy.get_namespace().strip("/")
 
         # Add the node parameters to the parameters dictionary and load their default values
-        self.parameters['~gain'] = None
         self.parameters['~trim'] = None
         self.parameters['~baseline'] = None
         self.parameters['~radius'] = None
@@ -77,6 +75,8 @@ class KinematicsNode(DTROS):
         self.parameters['~angle_lim'] = None
         self.parameters['~v_max'] = None
         self.parameters['~omega_max'] = None
+        self.parameters['~k_P'] = None
+        self.parameters['~k_I'] = None
 
         # Set parameters using a robot-specific yaml file if such exists
         self.readParamFromFile()
@@ -85,13 +85,18 @@ class KinematicsNode(DTROS):
         # Prepare the save calibration service
         self.srv_save = rospy.Service("~save_calibration", Empty, self.cbSrvSaveCalibration)
 
+        self.encoder_msg = EncoderStamped()
+        self.velocities = [0] * 5
+        self.velocity_error_integral = 0
+
         # Setup the publishers and subscribers
         self.sub_car_cmd = self.subscriber("~car_cmd", Twist2DStamped, self.car_cmd_callback)
+        self.sub_encoder = self.subscriber("encoder_node/encoder_velocity", EncoderStamped, self.encoder_callback)
         self.pub_wheels_cmd = self.publisher("~wheels_cmd_dbv2", WheelsCmdDBV2Stamped, queue_size=1)
         self.pub_velocity = self.publisher("~velocity", Twist2DStamped, queue_size=1)
 
-        details = "[gain: %s trim: %s baseline: %s radius: %s k: %s limit: %s omega_max: %s v_max: %s]" % \
-                  (self.parameters['~gain'], self.parameters['~trim'], self.parameters['~baseline'],
+        details = "[trim: %s baseline: %s radius: %s k: %s limit: %s omega_max: %s v_max: %s]" % \
+                  (self.parameters['~trim'], self.parameters['~baseline'],
                    self.parameters['~radius'], self.parameters['~k_wheel'], self.parameters['~limit'],
                    self.parameters['~omega_max'], self.parameters['~v_max'])
 
@@ -122,8 +127,8 @@ class KinematicsNode(DTROS):
             if yaml_dict is None:
                 # Empty yaml file
                 return
-            for param_name in ["angle_lim", "axis_distance", "baseline", "cog_distance", "gain", "k_wheel", "limit",
-                               "radius", "trim"]:
+            for param_name in ["angle_lim", "axis_distance", "baseline", "cog_distance", "k_wheel", "limit",
+                               "radius", "trim", "k_P", "k_I"]:
                 param_value = yaml_dict.get(param_name)
                 if param_name is not None:
                     rospy.set_param("~"+param_name, param_value)
@@ -168,13 +173,14 @@ class KinematicsNode(DTROS):
             "axis_distance": self.parameters["~axis_distance"],
             "baseline": self.parameters["~baseline"],
             "cog_distance": self.parameters["~cog_distance"],
-            "gain": self.parameters["~gain"],
             "k_wheel": self.parameters["~k_wheel"],
             "limit": self.parameters["~limit"],
             "omega_max": self.parameters["~omega_max"],
             "radius": self.parameters["~radius"],
             "trim": self.parameters["~trim"],
             "v_max": self.parameters["~v_max"],
+            "k_P": self.parameters["~k_P"],
+            "k_I": self.parameters["~k_I"]
         }
 
         # Write to file
@@ -183,8 +189,8 @@ class KinematicsNode(DTROS):
             outfile.write(yaml.dump(data, default_flow_style=False))
 
         # Printout
-        saved_details = "[gain: %s trim: %s baseline: %s radius: %s k: %s limit: %s omega_max: %s v_max: %s]" % \
-        (self.parameters['~gain'], self.parameters['~trim'], self.parameters['~baseline'], self.parameters['~radius'],
+        saved_details = "[trim: %s baseline: %s radius: %s k: %s limit: %s omega_max: %s v_max: %s]" % \
+        (self.parameters['~trim'], self.parameters['~baseline'], self.parameters['~radius'],
          self.parameters['~k_wheel'], self.parameters['~limit'], self.parameters['~omega_max'], self.parameters['~v_max'])
         self.log("Saved kinematic calibration to %s with values: %s" % (file_name, saved_details))
 
@@ -210,6 +216,11 @@ class KinematicsNode(DTROS):
             gamma_limited = math.fabs(gamma_servo) + self.parameters['~trim']
         return gamma_limited
 
+    def encoder_callback(self, msg):
+        self.encoder_msg = msg
+        self.velocities = self.velocities[1:] + [msg.vel_encoder]
+
+
     def car_cmd_callback(self, msg_car_cmd):
         """
         A callback that reposponds to received `car_cmd` messages by calculating the
@@ -229,7 +240,7 @@ class KinematicsNode(DTROS):
             elif self.parameters['~limit'] > 1:
                 self.log("The new limit %s is larger than max of 1" % self.parameters['~limit'], type='warn')
 
-            for param in ['gain', 'baseline', 'radius', 'k_wheel', 'v_max', 'omega_max']:
+            for param in ['baseline', 'radius', 'k_wheel', 'v_max', 'omega_max']:
                 if self.parameters['~'+param] < 0:
                     self.log("The new value of %s is negative, should be positive." % param, type='warn')
             self.parametersChanged = False
@@ -238,7 +249,7 @@ class KinematicsNode(DTROS):
 
         # Adjusting k by gain
         # changed "k_r" to "k_wheel" and the trim is now seperately handled, RFMH_2019_02_25
-        k_wheel_inv = self.parameters['~gain'] / self.parameters['~k_wheel']
+        k_wheel_inv = 1.0 / self.parameters['~k_wheel']
 
         # omega_r changed to omega_wheel and skipped the whole calculation
         omega_wheel = msg_car_cmd.v / self.parameters['~radius']
@@ -267,6 +278,21 @@ class KinematicsNode(DTROS):
         # Conversion from motor rotation rate to duty cycle for DC motor
         # omega_r changed to omega_wheel, u_r to u_wheel and k_r_inv to k_wheel_inv, RFMH_2019_02_25
         u_wheel = omega_wheel * k_wheel_inv
+        measured_velocity = sum(self.velocities) / len(self.velocities)
+
+        # If commanding the car to stop, then reset the integral
+        if abs(msg_car_cmd.v) < 0.001:
+            self.velocity_error_integral = 0
+        # Only try to control the velocity if we have received velocity measurements
+        elif measured_velocity != 0:
+            # The encoder cannot measure direction of rotation, so it always reports a positive velocity.
+            # Assume that if the desired velocity is negative, then the actual velocity is also negative.
+            measured_velocity = math.copysign(measured_velocity, msg_car_cmd.v)
+            error = msg_car_cmd.v - measured_velocity
+            self.velocity_error_integral += error
+            self.velocity_error_integral = min(max(self.velocity_error_integral, -0.5), 0.5)
+            adjustment = self.parameters['~k_P'] * error + self.parameters['~k_I'] * self.velocity_error_integral
+            u_wheel += adjustment
 
         # Limiting output to limit, which is 1.0 for the duckiebot
         # u_r_limited changed to "u_wheel_limited" and "u_r" changed to "u_wheel", RFMH_2019_02_25
@@ -288,7 +314,7 @@ class KinematicsNode(DTROS):
 
         # FORWARD KINEMATICS PART
 
-        k_wheel_inv = self.parameters['~gain'] / self.parameters['~k_wheel']
+        k_wheel_inv = 1.0 / self.parameters['~k_wheel']
 
         # Conversion from motor duty to motor rotation rate
         omega = msg_wheels_cmd.vel_wheel / k_wheel_inv
